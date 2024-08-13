@@ -1,0 +1,6 @@
+#ignore files from being tracked
+*.env
+node_modules
+*.key
+*.cert
+*.pem
