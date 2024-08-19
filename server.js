@@ -76,6 +76,58 @@ app.post("/api/signup", async (req, res) => {
   }
 });
 
+//login route
+
+app.post("/api/login", async (req, res) => {
+  try {
+    //extract user credentials from the client sign in page
+    const { userEmail, userPassword } = req.body;
+    //retrieve the user details from the database for comparison with entered details
+    const user = await User.findOne({ userEmail });
+
+    //check if the User object is not empty
+    if (user) {
+      //compare incoming password with hashed password
+      const hashedPassword = user.userPassword;
+
+      const comparePasswords = await bcrypt.compare(
+        userPassword,
+        hashedPassword
+      );
+
+      if (userEmail) {
+        //get user email from the database
+        const userDatabaseEmail = user.userEmail;
+        //jwt payload
+        const jwtPayLoad = {
+          userId: user._id,
+          userEmails: userDatabaseEmail,
+        };
+
+        //jwt token secret
+        const jwtTokenSecret = process.env.ACCESS_TOKEN_SECRET;
+        //sign the user details with a jwt key
+        jwt.sign(jwtPayLoad, jwtTokenSecret, (err, secretToken) => {
+          if (err) {
+            res.status(500).json({
+              message: "There was an error generating a token for the client",
+              err,
+            });
+          } else {
+            console.log(secretToken);
+            res.status(200).json({ token: secretToken, userRole: role });
+          }
+        });
+      } else {
+        res.status(401).json({ message: "User not in the system" });
+      }
+      
+    }
+  } catch (error) {
+    console.error(error);
+  }
+});
+
 // Add Product Route
 app.post("/api/products", async (req, res) => {
   const {
