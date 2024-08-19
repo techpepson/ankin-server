@@ -1,4 +1,3 @@
-// server.js
 import express from "express";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
@@ -7,12 +6,14 @@ import { mongoConnect } from "./database/mongoConfig.js";
 import session from "express-session";
 import { Product } from "./models/product.js";
 import cors from "cors";
+import formidable from "formidable";
+import fs from "fs";
+import path from "path";
 
-//initialoize express app
-
+// Initialize express app
 const app = express();
 
-//connection port
+// Connection port
 const PORT = process.env.PORT || 4000;
 
 // Middleware
@@ -25,7 +26,8 @@ app.use(
     saveUninitialized: true,
   })
 );
-//corsOptions definitions
+
+// CORS Options definitions
 const corsOptions = {
   origin: `https://ankin-fashion.vercel.app`,
 };
@@ -33,6 +35,50 @@ app.use(cors(corsOptions));
 
 // Connect to MongoDB
 mongoConnect();
+
+// Image upload route
+app.post("/api/upload", (req, res) => {
+  const form = new formidable.IncomingForm();
+  form.uploadDir = path.join(__dirname, "uploads"); // Directory to save images
+  form.keepExtensions = true;
+
+  // Parse the incoming request containing the form data
+  form.parse(req, (err, fields, files) => {
+    if (err) {
+      return res.status(500).json({ message: "Error parsing form data", err });
+    }
+
+    // Assuming 'image' is the field name in your form
+    const imageFile = files.image;
+
+    if (!imageFile) {
+      return res.status(400).json({ message: "No image file uploaded" });
+    }
+
+    const oldPath = imageFile.filepath;
+    const newPath = path.join(form.uploadDir, imageFile.originalFilename);
+
+    // Move the file to the final directory
+    fs.rename(oldPath, newPath, async (err) => {
+      if (err) {
+        return res.status(500).json({ message: "Error saving file", err });
+      }
+
+      // Save the image path in the database
+      try {
+        const newProduct = new Product({
+          ...fields,
+          itemImages: newPath, // Save the file path in the database
+        });
+
+        await newProduct.save();
+        res.status(201).json({ message: "Product and image uploaded successfully", newProduct });
+      } catch (error) {
+        res.status(500).json({ message: "Error saving product", error });
+      }
+    });
+  });
+});
 
 // Signup Route
 app.post("/api/signup", async (req, res) => {
@@ -45,7 +91,7 @@ app.post("/api/signup", async (req, res) => {
       return res.status(400).json({ message: "User already exists." });
     }
 
-    //generate a gensalt
+    // Generate a salt
     const salt = await bcrypt.genSalt(10);
     // Hash the password
     const hashedPassword = await bcrypt.hash(userPassword, salt);
@@ -60,10 +106,8 @@ app.post("/api/signup", async (req, res) => {
 
     await newUser.save();
 
-    //jwt secretToken
-    const jwtSecretToken = process.env.JWT_SECRET;
     // Optionally create a token for the user
-    const token = jwt.sign({ id: newUser._id }, jwtSecretToken, {
+    const token = jwt.sign({ id: newUser._id }, process.env.JWT_SECRET, {
       expiresIn: "1h",
     });
 
@@ -76,55 +120,28 @@ app.post("/api/signup", async (req, res) => {
   }
 });
 
-//login route
-
+// Login Route
 app.post("/api/login", async (req, res) => {
   try {
-    //extract user credentials from the client sign in page
     const { userEmail, userPassword } = req.body;
-    //retrieve the user details from the database for comparison with entered details
     const user = await User.findOne({ userEmail });
 
-    //check if the User object is not empty
     if (user) {
-      //compare incoming password with hashed password
-      const hashedPassword = user.userPassword;
+      const comparePasswords = await bcrypt.compare(userPassword, user.userPassword);
 
-      const comparePasswords = await bcrypt.compare(
-        userPassword,
-        hashedPassword
-      );
-
-      if (userEmail) {
-        //get user email from the database
-        const userDatabaseEmail = user.userEmail;
-        //jwt payload
-        const jwtPayLoad = {
-          userId: user._id,
-          userEmails: userDatabaseEmail,
-        };
-
-        //jwt token secret
-        const jwtTokenSecret = process.env.ACCESS_TOKEN_SECRET;
-        //sign the user details with a jwt key
-        jwt.sign(jwtPayLoad, jwtTokenSecret, (err, secretToken) => {
-          if (err) {
-            res.status(500).json({
-              message: "There was an error generating a token for the client",
-              err,
-            });
-          } else {
-            console.log(secretToken);
-            res.status(200).json({ token: secretToken, userRole: role });
-          }
-        });
+      if (comparePasswords) {
+        const jwtPayLoad = { userId: user._id, userEmail: user.userEmail };
+        const token = jwt.sign(jwtPayLoad, process.env.ACCESS_TOKEN_SECRET, { expiresIn: "1h" });
+        res.status(200).json({ token, userRole: user.role });
       } else {
-        res.status(401).json({ message: "User not in the system" });
+        res.status(401).json({ message: "Invalid credentials" });
       }
-      
+    } else {
+      res.status(401).json({ message: "User not in the system" });
     }
   } catch (error) {
     console.error(error);
+    res.status(500).json({ message: "Error during login", error });
   }
 });
 
@@ -141,14 +158,11 @@ app.post("/api/products", async (req, res) => {
     itemImages,
   } = req.body;
 
-  // Process images if any are uploaded
-
   try {
-    // Create a new product
     const newProduct = new Product({
       itemName,
       itemDescription,
-      itemAvailability: itemAvailability === "true", // Convert to boolean
+      itemAvailability: itemAvailability === "true",
       itemBrand,
       itemCategory,
       itemType,
@@ -164,7 +178,7 @@ app.post("/api/products", async (req, res) => {
   }
 });
 
-//route to fetch women clothing
+// Routes to get items by category
 app.get("/get-women", async (req, res) => {
   try {
     const items = await Product.find({ itemCategory: "women" });
@@ -173,7 +187,7 @@ app.get("/get-women", async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 });
-//acessories route
+
 app.get("/get-accessories", async (req, res) => {
   try {
     const items = await Product.find({ itemType: "accessories" });
@@ -182,7 +196,7 @@ app.get("/get-accessories", async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 });
-//route to get men items
+
 app.get("/get-men", async (req, res) => {
   try {
     const items = await Product.find({ itemCategory: "men" });
@@ -191,7 +205,7 @@ app.get("/get-men", async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 });
-//route to get kids items
+
 app.get("/get-kids", async (req, res) => {
   try {
     const items = await Product.find({ itemCategory: "kids" });
@@ -200,7 +214,7 @@ app.get("/get-kids", async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 });
-//route to get unisex items
+
 app.get("/get-unisex", async (req, res) => {
   try {
     const items = await Product.find({ itemCategory: "unisex" });
@@ -223,7 +237,7 @@ app.get("/items/:id", async (req, res) => {
   }
 });
 
-//endpoint to get the users in the system
+// Endpoint to get the users in the system
 app.get("/api/users", async (req, res) => {
   try {
     const userData = await User.find();
@@ -232,7 +246,8 @@ app.get("/api/users", async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 });
-//endpoint to get the products listed in the system
+
+// Endpoint to get the products listed in the system
 app.get("/api/products", async (req, res) => {
   try {
     const productData = await Product.find();
